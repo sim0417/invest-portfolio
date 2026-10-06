@@ -262,7 +262,7 @@ function renderPerf(){
 }
 
 // ── PC 화면
-function pp(v){return num(v)?(v>0?'+':'')+(v*100).toFixed(1)+'p':esc(v||'')}
+function pp(v){return num(v)?(v>0?'+':'')+v.toFixed(1)+'%p':esc(v||'')}
 function wbar(w,g,max){w=num(w)?w:0;g=num(g)?g:0;return '<span class="wbar"><i style="width:'+Math.min(100,w/max*100)+'%"></i><u style="left:'+Math.min(100,g/max*100)+'%"></u></span>'}
 function kpi(lbl,val,note,c){return '<div class="card"><div class="lbl">'+lbl+'</div><div class="big '+(c||'')+'">'+val+'</div>'+(note?'<div class="note">'+note+'</div>':'')+'</div>'}
 function renderDesk(){
@@ -284,10 +284,10 @@ function renderDesk(){
     h+='<tr><td><span class="tk">'+esc(x.ticker)+'</span> <span class="lbl">'+esc(x.name)+'</span></td><td>'+sh(x.shares)+'</td><td>'+krw(x.avgCostKrw)+'</td><td>'+usd(x.priceUsd)+'</td><td><b>'+krw(x.valueKrw)+'</b></td><td>'+krw(x.costKrw)+'</td>'
       +'<td class="'+cls(x.pnlKrw)+'">'+krw(x.pnlKrw)+'</td><td class="'+cls(x.ret)+'">'+spct(x.ret)+'</td>'
       +'<td class="l">'+wbar(x.weight,x.target,mx)+pct(x.weight,1)+' / '+pct(x.target,0)+'</td><td>'+pp(x.gapPp)+'</td>'
-      +'<td class="l">'+chip(x.action)+chip(x.priceStatus)+(x.valStatus!=='OK'?chip(x.valStatus):'')+'</td></tr>';
+      +'<td class="l">'+chip(x.action)+(/^(OK|DELAYED)$/.test(x.priceStatus)?'':chip(x.priceStatus))+(x.valStatus!=='OK'?chip(x.valStatus):'')+'</td></tr>';
   });
   h+='<tr class="sum"><td>주식 합계</td><td></td><td></td><td></td><td>'+krw(D.stocks)+'</td><td>'+krw(D.costBasis)+'</td><td class="'+cls(D.unrealized)+'">'+krw(D.unrealized)+'</td><td class="'+cls(D.unrealizedRet)+'">'+spct(D.unrealizedRet)+'</td><td class="l"></td><td></td><td></td></tr>'
-    +'<tr><td><span class="tk">CASH</span> <span class="lbl">'+usd(D.cashUsd)+' + '+krw(D.cashKrw)+'</span></td><td></td><td></td><td></td><td>'+krw(D.cashKrwTotal)+'</td><td></td><td></td><td></td><td class="l">'+wbar(D.cashWeight,D.cashTarget,mx)+pct(D.cashWeight,1)+' / '+pct(D.cashTarget,0)+'</td><td>'+pp(num(D.cashWeight)&&num(D.cashTarget)?D.cashWeight-D.cashTarget:'')+'</td><td></td></tr>'
+    +'<tr><td><span class="tk">CASH</span> <span class="lbl">'+usd(D.cashUsd)+' + '+krw(D.cashKrw)+'</span></td><td></td><td></td><td></td><td>'+krw(D.cashKrwTotal)+'</td><td></td><td></td><td></td><td class="l">'+wbar(D.cashWeight,D.cashTarget,mx)+pct(D.cashWeight,1)+' / '+pct(D.cashTarget,0)+'</td><td>'+pp(num(D.cashWeight)&&num(D.cashTarget)?(D.cashWeight-D.cashTarget)*100:'')+'</td><td></td></tr>'
     +'<tr class="sum"><td>총계 (NAV)</td><td></td><td></td><td></td><td>'+krw(D.nav)+'</td><td></td><td></td><td></td><td class="l"></td><td></td><td></td></tr>';
   h+='</tbody></table></div><div class="note">PLTU '+usd(D.pltu.price)+' · PLTR(참고, NAV 미포함) '+usd(D.pltu.pltr)+' · '+esc(D.pltu.state)+'</div></div>';
   // 리밸런싱

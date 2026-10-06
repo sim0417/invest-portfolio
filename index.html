@@ -111,6 +111,17 @@ function srv(fn, args, ok, fail){
     })
     .catch(function(e){if(fail)fail({message:'네트워크 오류: '+(e&&e.message||e)})});
 }
+function $(id){return document.getElementById(id)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function num(v){return typeof v==='number'&&isFinite(v)}
+function krw(v){return num(v)?Math.round(v).toLocaleString('ko-KR')+'원':esc(v||'N/A')}
+function usd(v){return num(v)?'$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):esc(v||'N/A')}
+function pct(v,d){return num(v)?(v*100).toFixed(d==null?2:d)+'%':esc(v||'N/A')}
+function spct(v){return num(v)?(v>0?'+':'')+(v*100).toFixed(2)+'%':esc(v||'N/A')}
+function cls(v){return num(v)?(v>0?'pos':v<0?'neg':''):''}
+function sh(v){return num(v)?(+v.toFixed(6)).toString():esc(v)}
+function chip(text){var t=String(text||'');var c=/^(OK|COMPLETE|DELAYED|EXACT|ACTIVE|true)/.test(t)?'ok':/(ERROR|MISSING|INCOMPLETE|BROKEN|RECONCILIATION|N\/A|MISMATCH)/.test(t)?'bad':/(STALE|PROVISIONAL|APPROX|UNVERIFIED|MANUAL|PENDING|REVISED|EXIT|OVER|UNDER|NOT_STARTED|WARN)/.test(t)?'warn':'';return '<span class="chip '+c+'">'+esc(t)+'</span>'}
+
 function load(){
   if(!TOK){showLogin('');return}
   $('login').classList.add('hidden');$('loading').classList.remove('hidden');

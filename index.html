@@ -96,7 +96,7 @@ table.t td.l{text-align:left}
 <header><h1>투자 포트폴리오 <small><span id="stamp"></span> <a href="#" id="logout" class="hidden" style="color:var(--sub)">로그아웃</a></small></h1></header>
 <main>
   <div id="loading">불러오는 중…</div>
-  <section id="login" class="hidden"><div class="card"><div class="lbl">본인 확인</div><button class="btn" id="gLogin">Google 계정으로 로그인</button><div class="note">허용된 계정(개인·회사)만 열립니다. 로그인은 Google 정책상 1시간 유지되고, 다시 누르면 지난 계정으로 바로 이어집니다.</div><div id="pwMsg" class="msg bad"></div></div></section>
+  <section id="login" class="hidden"><div class="card"><div class="lbl">본인 확인</div><button class="btn" id="gLogin">Google 계정으로 로그인</button><div class="note">허용된 계정(개인·회사)만 열립니다. 한 번 로그인하면 24시간 유지됩니다.</div><div id="pwMsg" class="msg bad"></div></div></section>
   <section id="tab-sum" class="hidden"></section>
   <section id="tab-hold" class="hidden"></section>
   <section id="tab-reb" class="hidden"></section>
@@ -118,49 +118,72 @@ var D = null, TAB = 'sum', FLASH = null;
 var CFG = {
   clientId: '1005314406530-kn7geuh12ug67veio0mpnm07hsl9atbo.apps.googleusercontent.com',
   scriptId: 'AKfycbzeMnfzN6hZ9FNJT8UOVfALuq00CRnvBtBC0lV2tmR1SWJjSMzdYSJ0jF59cKTqclTS0g',  // API 실행 파일 배포 ID
+  broker: 'https://script.google.com/macros/s/AKfycbyPteTw0xinyoAnHwIZc4NCclZw2o1pY1KZshSVmWYCHtZyCIDoNx_QWOnhoxtnvC2j/exec',  // 로그인 중계(portfolio-auth)
   scopes: 'https://www.googleapis.com/auth/script.scriptapp https://www.googleapis.com/auth/script.external_request https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/spreadsheets.currentonly'
 };
 var TOK = null, tokenClient = null, pendingAfterLogin = null, SESSION = 0;
-var UI_VERSION = 'v9.6';
-// 액세스 토큰은 Google이 1시간짜리로만 준다(리프레시 토큰은 서버 없이 받을 수 없음). 그 1시간 동안은 새로고침·새 탭에서도 유지되게 localStorage에 두고,
-// 만료되면 마지막 계정(login_hint)으로 한 번 눌러 다시 받는다. 로그아웃하면 지운다. (보안 검토 V9-05: 같은 origin JS가 읽을 수 있는 잔여 위험은 사용자 편의를 위해 수용)
+var UI_VERSION = 'v10.0';
+// 로그인 유지: 로그인하면 중계 서버(별도 Apps Script 「portfolio-auth」)가 갱신 토큰을 보관하고 24시간짜리 세션을 준다.
+// 액세스 토큰(1시간)이 모자라면 세션으로 중계 서버에서 조용히 새로 받는다 → 24시간 동안 다시 로그인하지 않는다.
+// 세션·토큰은 localStorage에 둔다(같은 origin JS가 읽을 수 있는 잔여 위험은 사용자 편의를 위해 수용). 로그아웃하면 Google 권한까지 철회한다.
+var SESS = null, REFRESHING = null;
 try { sessionStorage.removeItem('pfTok'); var t = JSON.parse(localStorage.getItem('pfTok') || 'null'); if (t && t.exp > Date.now() + 60000) TOK = t; } catch (e) {}
+try { SESS = JSON.parse(localStorage.getItem('pfSess') || 'null'); if (!SESS || !(SESS.exp > Date.now())) SESS = null; } catch (e) {}
 function saveTok(t){TOK=t;try{if(t)localStorage.setItem('pfTok',JSON.stringify(t));else localStorage.removeItem('pfTok')}catch(e){}}
+function saveSess(x){SESS=x;try{if(x)localStorage.setItem('pfSess',JSON.stringify(x));else localStorage.removeItem('pfSess')}catch(e){}}
 function lastUser(){try{return localStorage.getItem('pfUser')||''}catch(e){return ''}}
-// 쓰는 중 자동 연장: 토큰이 15분 안에 만료되면 다음 클릭·터치 때 같은 계정으로 조용히 새 토큰을 받는다(prompt:none — 창이 잠깐 떴다 닫힐 수 있음).
-// 브라우저가 사용자 동작 없이 띄우는 팝업은 막으므로 클릭에 붙인다. 화면을 계속 쓰는 동안에는 다시 로그인할 일이 없다.
-var RENEWING=false;
-function silentRenew(){if(RENEWING||!TOK||!lastUser()||!initGis())return;RENEWING=true;setTimeout(function(){RENEWING=false},60000);tokenClient.requestAccessToken({prompt:'none',login_hint:lastUser()})}
-document.addEventListener('pointerdown',function(){if(TOK&&TOK.exp-Date.now()<15*60000)silentRenew()},true);
-function login(){if(!initGis())return false;var u=lastUser();tokenClient.requestAccessToken(u?{prompt:'',login_hint:u}:{prompt:''});return true}
+function broker(body){return fetch(CFG.broker,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)}).then(function(r){return r.json()})}
+// 토큰 남은 시간이 need보다 짧으면 세션으로 새 토큰을 받아 온다(동시에 여러 호출이 와도 한 번만 요청)
+function ensureToken(need,cont,lost){
+  if(TOK&&TOK.exp>Date.now()+need)return cont();
+  if(!SESS||!(SESS.exp>Date.now())){saveSess(null);return lost()}
+  if(!REFRESHING)REFRESHING=broker({op:'refresh',session:SESS.s}).then(function(j){
+    REFRESHING=null;
+    if(j.access_token){saveTok({access_token:j.access_token,exp:Date.now()+(Number(j.expires_in)||3600)*1000});return true}
+    if(j.error==='relogin')saveSess(null);
+    return false;
+  },function(){REFRESHING=null;return false});
+  REFRESHING.then(function(okk){if(okk&&TOK&&TOK.exp>Date.now()+need)cont();else lost()});
+}
+var NEED_CONSENT=false;
+function login(){if(!(window.google&&google.accounts&&google.accounts.oauth2))return false;codeClient().requestCode();return true}
+function codeClient(){
+  var cfg={client_id:CFG.clientId,scope:CFG.scopes+' openid',ux_mode:'popup',
+    callback:function(r){
+      if(r.error){pendingAfterLogin=null;showLogin('로그인 실패: '+r.error);return}
+      if(!google.accounts.oauth2.hasGrantedAllScopes.apply(null,[r].concat(CFG.scopes.split(' ')))){pendingAfterLogin=null;showLogin('권한을 일부만 허용했습니다. 로그인 창의 권한 항목을 모두 허용해야 시트를 읽고 쓸 수 있습니다.');return}
+      $('pwMsg').textContent='로그인 처리 중…';
+      broker({op:'exchange',code:r.code}).then(function(j){
+        if(j.error==='need_consent'){NEED_CONSENT=true;pendingAfterLogin=null;showLogin('로그인 유지(24시간)를 위해 권한 확인이 한 번 더 필요합니다. 로그인 버튼을 다시 눌러 주세요.');return}
+        if(j.error){pendingAfterLogin=null;showLogin(j.message||('로그인 실패: '+j.error));return}
+        NEED_CONSENT=false;SESSION++;
+        saveSess({s:j.session,exp:j.sessionExp,email:j.email});
+        saveTok({access_token:j.access_token,exp:Date.now()+(Number(j.expires_in)||3600)*1000});
+        try{localStorage.setItem('pfUser',j.email)}catch(e){}
+        var f=pendingAfterLogin;pendingAfterLogin=null;if(f)f();else load();
+      },function(e){pendingAfterLogin=null;showLogin('로그인 서버에 연결하지 못했습니다: '+(e&&e.message||e))});
+    },
+    error_callback:function(e){pendingAfterLogin=null;if(!D)showLogin('로그인 창이 닫혔거나 열리지 않았습니다'+(e&&e.type?' ('+e.type+')':'')+'. 팝업 차단을 확인하고 다시 눌러 주세요.')}
+  };
+  var u=lastUser();if(u)cfg.login_hint=u;
+  if(NEED_CONSENT)cfg.select_account=true;
+  return google.accounts.oauth2.initCodeClient(cfg);
+}
 function authKind(status,m){m=String(m);if(/AUTH_DENIED/.test(m))return 'denied';if(status===401||/UNAUTHENTICATED|invalid authentication|invalid_token|Invalid Credentials/i.test(m))return 'expired';if(status===403||status===404||/PERMISSION_DENIED|NOT_FOUND/.test(m))return 'forbidden';return ''}
 function clearData(){D=null;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).innerHTML=''});$('desk').innerHTML='';$('stamp').textContent=''}
 function showLogin(msg){clearData();SUBMITTING=false;ACTIVE=null;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).classList.add('hidden')});$('desk').classList.add('hidden');$('loading').classList.add('hidden');$('login').classList.remove('hidden');document.querySelector('nav').classList.add('hidden');$('logout').classList.add('hidden');$('pwMsg').textContent=msg?String(msg).replace(/^.*AUTH_DENIED: ?/,''):''}
-function initGis(){
-  if(tokenClient||!(window.google&&google.accounts&&google.accounts.oauth2))return !!tokenClient;
-  tokenClient=google.accounts.oauth2.initTokenClient({client_id:CFG.clientId,scope:CFG.scopes,
-    callback:function(r){
-      if(RENEWING){RENEWING=false;   // 백그라운드 연장: 실패해도 화면을 바꾸지 않는다(만료되면 그때 로그인 버튼)
-        if(!r.error&&google.accounts.oauth2.hasGrantedAllScopes.apply(null,[r].concat(CFG.scopes.split(' '))))saveTok({access_token:r.access_token,exp:Date.now()+(Number(r.expires_in)||3600)*1000});
-        return}
-      if(r.error){pendingAfterLogin=null;showLogin('로그인 실패: '+r.error);return}
-      if(!google.accounts.oauth2.hasGrantedAllScopes.apply(null,[r].concat(CFG.scopes.split(' ')))){pendingAfterLogin=null;showLogin('권한을 일부만 허용했습니다. 로그인 창의 권한 항목을 모두 허용해야 시트를 읽고 쓸 수 있습니다.');return}
-      SESSION++;saveTok({access_token:r.access_token,exp:Date.now()+(Number(r.expires_in)||3600)*1000});
-      var f=pendingAfterLogin;pendingAfterLogin=null;if(f)f();else load();
-    },
-    error_callback:function(e){if(RENEWING){RENEWING=false;return}pendingAfterLogin=null;if(!D)showLogin('로그인 창이 닫혔거나 열리지 않았습니다'+(e&&e.type?' ('+e.type+')':'')+'. 팝업 차단을 확인하고 다시 눌러 주세요.')}
-  });
-  return true;
-}
+function initGis(){return !!(window.google&&google.accounts&&google.accounts.oauth2)}
 // 서버 함수 호출: Apps Script API scripts.run (호출한 계정으로 실행된다)
 // opts.minMs: 토큰 남은 시간이 이보다 짧으면 호출하지 않는다(긴 쓰기 도중 만료 방지). opts.onReauth(retry)가 있으면 재로그인 후 이어서 실행.
 function srv(fn, args, ok, fail, opts){
   var need=(opts&&opts.minMs)||30000, fin=function(){if(opts&&opts.always)try{opts.always()}catch(e){}};   // always: 어떤 경로로 끝나든 호출(입력 잠금 해제용)
-  if(!TOK||TOK.exp<Date.now()+need){
+  ensureToken(need,function(){call(fn,args,ok,fail,opts,fin)},function(){
     fin();
     if(TOK&&opts&&opts.onReauth){opts.onReauth(function(){srv(fn,args,ok,fail,opts)});return}
-    saveTok(null);showLogin('로그인이 만료됐습니다. 다시 로그인해 주세요.');return;
-  }
+    saveTok(null);showLogin(lastUser()?'로그인이 만료됐습니다(24시간). 다시 로그인해 주세요.':'');
+  });
+}
+function call(fn,args,ok,fail,opts,fin){
   var g=SESSION;   // 로그아웃·계정 전환 뒤 늦게 온 응답은 버린다
   fetch('https://script.googleapis.com/v1/scripts/'+CFG.scriptId+':run',{method:'POST',headers:{'Authorization':'Bearer '+TOK.access_token,'Content-Type':'application/json'},body:JSON.stringify({'function':fn,parameters:args||[],devMode:false})})
     .then(function(r){return r.json().catch(function(){return {error:{message:'HTTP '+r.status}}}).then(function(j){return {status:r.status,j:j}})},
@@ -171,7 +194,7 @@ function srv(fn, args, ok, fail, opts){
       var j=x.j;
       if(j.error){var det=(j.error.details&&j.error.details[0])||{};var m=det.errorMessage||j.error.message||('HTTP '+x.status);
         var k=authKind(x.status,m);
-        if(k==='expired'){saveTok(null);showLogin('로그인이 만료됐습니다. 다시 로그인해 주세요.');return}
+        if(k==='expired'){saveTok(null);if(SESS&&!(opts&&opts._retried)){srv(fn,args,ok,fail,Object.assign({},opts,{_retried:true,always:null}));return}showLogin('로그인이 만료됐습니다. 다시 로그인해 주세요.');return}
         if(k==='denied'){saveTok(null);showLogin(m);return}
         if(k==='forbidden'){if(fail)fail({message:'권한이 없습니다: '+m+' (회사 계정이면 조직 정책이 외부 앱을 막았을 수 있습니다. 시트 공유 권한도 확인하세요.)'});return}   // 토큰은 유지: 403은 함수·권한 단위 거부일 수 있다
         if(fail)fail({message:'서버 오류: '+m});return}
@@ -193,12 +216,12 @@ function sh(v){return num(v)?(+v.toFixed(6)).toString():esc(v)}
 function chip(text){var t=String(text||'');var c=/^(OK|COMPLETE|DELAYED|EXACT|ACTIVE|true)/.test(t)?'ok':/(ERROR|MISSING|INCOMPLETE|BROKEN|RECONCILIATION|N\/A|MISMATCH)/.test(t)?'bad':/(STALE|PROVISIONAL|APPROX|UNVERIFIED|MANUAL|PENDING|REVISED|EXIT|OVER|UNDER|NOT_STARTED|WARN)/.test(t)?'warn':'';return '<span class="chip '+c+'">'+esc(t)+'</span>'}
 
 function load(){
-  if(!TOK){showLogin('');return}
+  if(!TOK&&!SESS){showLogin('');return}
   $('login').classList.add('hidden');$('loading').classList.remove('hidden');
   srv('webGetDashboard',[],function(d){D=d;$('loading').classList.add('hidden');document.querySelector('nav').classList.remove('hidden');$('logout').classList.remove('hidden');render()},function(e){$('loading').textContent='불러오기 실패: '+(e&&e.message||e)});
 }
 $('gLogin').onclick=function(){$('pwMsg').textContent='';if(!login())$('pwMsg').textContent='로그인 모듈을 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요.'};
-$('logout').onclick=function(e){e.preventDefault();SESSION++;try{localStorage.removeItem('pfUser')}catch(x){}if(TOK&&window.google&&google.accounts)google.accounts.oauth2.revoke(TOK.access_token,function(){});saveTok(null);showLogin('')};
+$('logout').onclick=function(e){e.preventDefault();SESSION++;saveSess(null);try{localStorage.removeItem('pfUser')}catch(x){}if(TOK&&window.google&&google.accounts)google.accounts.oauth2.revoke(TOK.access_token,function(){});saveTok(null);showLogin('')};
 function show(t){TAB=t;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).classList.toggle('hidden',k!==t)});document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('on',b.dataset.t===t)});window.scrollTo(0,0)}
 document.querySelectorAll('nav button').forEach(function(b){b.onclick=function(){show(b.dataset.t)}});
 
@@ -206,7 +229,7 @@ var DESK_MQ=window.matchMedia?window.matchMedia('(min-width:1100px)'):{matches:f
 function isDesk(){return DESK_MQ.matches}
 if(DESK_MQ.addEventListener)DESK_MQ.addEventListener('change',function(){if(D)render()});
 function render(){
-  $('stamp').textContent='조회 '+D.now+(D.user?' · '+D.user:'');
+  $('stamp').textContent='조회 '+D.now+(D.user?' · '+D.user:'')+(SESS?' · 로그인 유지 ~'+new Date(SESS.exp).toTimeString().slice(0,5):'');
   try{if(D.user)localStorage.setItem('pfUser',D.user)}catch(e){}
   if(isDesk()){
     ['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).innerHTML='';$('tab-'+k).classList.add('hidden')});

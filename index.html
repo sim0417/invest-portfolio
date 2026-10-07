@@ -96,7 +96,7 @@ table.t td.l{text-align:left}
 <header><h1>투자 포트폴리오 <small><span id="stamp"></span> <a href="#" id="logout" class="hidden" style="color:var(--sub)">로그아웃</a></small></h1></header>
 <main>
   <div id="loading">불러오는 중…</div>
-  <section id="login" class="hidden"><div class="card"><div class="lbl">본인 확인</div><button class="btn" id="gLogin">Google 계정으로 로그인</button><div class="note">허용된 계정(개인·회사)만 열립니다. 로그인 창에서 사용할 계정을 고르세요.</div><div id="pwMsg" class="msg bad"></div></div></section>
+  <section id="login" class="hidden"><div class="card"><div class="lbl">본인 확인</div><button class="btn" id="gLogin">Google 계정으로 로그인</button><div class="note">허용된 계정(개인·회사)만 열립니다. 로그인은 Google 정책상 1시간 유지되고, 다시 누르면 지난 계정으로 바로 이어집니다.</div><div id="pwMsg" class="msg bad"></div></div></section>
   <section id="tab-sum" class="hidden"></section>
   <section id="tab-hold" class="hidden"></section>
   <section id="tab-reb" class="hidden"></section>
@@ -121,10 +121,13 @@ var CFG = {
   scopes: 'https://www.googleapis.com/auth/script.scriptapp https://www.googleapis.com/auth/script.external_request https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/spreadsheets.currentonly'
 };
 var TOK = null, tokenClient = null, pendingAfterLogin = null, SESSION = 0;
-var UI_VERSION = 'v9.3';
-// 액세스 토큰은 메모리에만 둔다(웹 저장소에 남기지 않음). 새로고침하면 다시 로그인한다. 이전 버전이 남긴 값은 지운다.
-try { localStorage.removeItem('pfTok'); sessionStorage.removeItem('pfTok'); } catch (e) {}
-function saveTok(t){TOK=t}
+var UI_VERSION = 'v9.4';
+// 액세스 토큰은 Google이 1시간짜리로만 준다(리프레시 토큰은 서버 없이 받을 수 없음). 그 1시간 동안은 새로고침·새 탭에서도 유지되게 localStorage에 두고,
+// 만료되면 마지막 계정(login_hint)으로 한 번 눌러 다시 받는다. 로그아웃하면 지운다. (보안 검토 V9-05: 같은 origin JS가 읽을 수 있는 잔여 위험은 사용자 편의를 위해 수용)
+try { sessionStorage.removeItem('pfTok'); var t = JSON.parse(localStorage.getItem('pfTok') || 'null'); if (t && t.exp > Date.now() + 60000) TOK = t; } catch (e) {}
+function saveTok(t){TOK=t;try{if(t)localStorage.setItem('pfTok',JSON.stringify(t));else localStorage.removeItem('pfTok')}catch(e){}}
+function lastUser(){try{return localStorage.getItem('pfUser')||''}catch(e){return ''}}
+function login(){if(!initGis())return false;var u=lastUser();tokenClient.requestAccessToken(u?{prompt:'',login_hint:u}:{prompt:''});return true}
 function authKind(status,m){m=String(m);if(/AUTH_DENIED/.test(m))return 'denied';if(status===401||/UNAUTHENTICATED|invalid authentication|invalid_token|Invalid Credentials/i.test(m))return 'expired';if(status===403||/PERMISSION_DENIED/.test(m))return 'forbidden';return ''}
 function clearData(){D=null;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).innerHTML=''});$('desk').innerHTML='';$('stamp').textContent=''}
 function showLogin(msg){clearData();SUBMITTING=false;ACTIVE=null;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).classList.add('hidden')});$('desk').classList.add('hidden');$('loading').classList.add('hidden');$('login').classList.remove('hidden');document.querySelector('nav').classList.add('hidden');$('logout').classList.add('hidden');$('pwMsg').textContent=msg?String(msg).replace(/^.*AUTH_DENIED: ?/,''):''}
@@ -186,8 +189,8 @@ function load(){
   $('login').classList.add('hidden');$('loading').classList.remove('hidden');
   srv('webGetDashboard',[],function(d){D=d;$('loading').classList.add('hidden');document.querySelector('nav').classList.remove('hidden');$('logout').classList.remove('hidden');render()},function(e){$('loading').textContent='불러오기 실패: '+(e&&e.message||e)});
 }
-$('gLogin').onclick=function(){if(!initGis()){$('pwMsg').textContent='로그인 모듈을 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요.';return}$('pwMsg').textContent='';tokenClient.requestAccessToken({prompt:''})};
-$('logout').onclick=function(e){e.preventDefault();SESSION++;if(TOK&&window.google&&google.accounts)google.accounts.oauth2.revoke(TOK.access_token,function(){});saveTok(null);showLogin('')};
+$('gLogin').onclick=function(){$('pwMsg').textContent='';if(!login())$('pwMsg').textContent='로그인 모듈을 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요.'};
+$('logout').onclick=function(e){e.preventDefault();SESSION++;try{localStorage.removeItem('pfUser')}catch(x){}if(TOK&&window.google&&google.accounts)google.accounts.oauth2.revoke(TOK.access_token,function(){});saveTok(null);showLogin('')};
 function show(t){TAB=t;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).classList.toggle('hidden',k!==t)});document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('on',b.dataset.t===t)});window.scrollTo(0,0)}
 document.querySelectorAll('nav button').forEach(function(b){b.onclick=function(){show(b.dataset.t)}});
 
@@ -196,6 +199,7 @@ function isDesk(){return DESK_MQ.matches}
 if(DESK_MQ.addEventListener)DESK_MQ.addEventListener('change',function(){if(D)render()});
 function render(){
   $('stamp').textContent='조회 '+D.now+(D.user?' · '+D.user:'');
+  try{if(D.user)localStorage.setItem('pfUser',D.user)}catch(e){}
   if(isDesk()){
     ['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).innerHTML='';$('tab-'+k).classList.add('hidden')});
     renderDesk();renderIn();$('desk').classList.remove('hidden');
@@ -413,7 +417,7 @@ function reqFor(kind,payload){var fp=JSON.stringify(payload),p=PEND[kind];if(!p|
 function msg(id,c,t){$(id).className='msg '+(c||'');$(id).textContent=t}
 function reauth(id,retry){
   $(id).className='msg bad';$(id).innerHTML='로그인 남은 시간이 짧아 이대로 보내면 도중에 끊길 수 있습니다. <button class="btn" id="reBtn">다시 로그인하고 이어서 기록</button>';
-  $('reBtn').onclick=function(){if(!initGis()){msg(id,'bad','로그인 모듈을 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요.');return}pendingAfterLogin=retry;tokenClient.requestAccessToken({prompt:''})};
+  $('reBtn').onclick=function(){pendingAfterLogin=retry;if(!login()){pendingAfterLogin=null;msg(id,'bad','로그인 모듈을 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요.')}};
 }
 // 지울 요청 ID가 지금 슬롯의 요청과 같을 때만 지운다(늦게 온 다른 요청의 응답이 새 요청 상태를 지우지 않게)
 function committed(kind,id){if(!PEND[kind]||PEND[kind].id!==id)return false;delete PEND[kind];DRAFT[kind]={};return true}

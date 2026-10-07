@@ -121,14 +121,14 @@ var CFG = {
   scopes: 'https://www.googleapis.com/auth/script.scriptapp https://www.googleapis.com/auth/script.external_request https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/spreadsheets.currentonly'
 };
 var TOK = null, tokenClient = null, pendingAfterLogin = null, SESSION = 0;
-var UI_VERSION = 'v9.4';
+var UI_VERSION = 'v9.5';
 // 액세스 토큰은 Google이 1시간짜리로만 준다(리프레시 토큰은 서버 없이 받을 수 없음). 그 1시간 동안은 새로고침·새 탭에서도 유지되게 localStorage에 두고,
 // 만료되면 마지막 계정(login_hint)으로 한 번 눌러 다시 받는다. 로그아웃하면 지운다. (보안 검토 V9-05: 같은 origin JS가 읽을 수 있는 잔여 위험은 사용자 편의를 위해 수용)
 try { sessionStorage.removeItem('pfTok'); var t = JSON.parse(localStorage.getItem('pfTok') || 'null'); if (t && t.exp > Date.now() + 60000) TOK = t; } catch (e) {}
 function saveTok(t){TOK=t;try{if(t)localStorage.setItem('pfTok',JSON.stringify(t));else localStorage.removeItem('pfTok')}catch(e){}}
 function lastUser(){try{return localStorage.getItem('pfUser')||''}catch(e){return ''}}
 function login(){if(!initGis())return false;var u=lastUser();tokenClient.requestAccessToken(u?{prompt:'',login_hint:u}:{prompt:''});return true}
-function authKind(status,m){m=String(m);if(/AUTH_DENIED/.test(m))return 'denied';if(status===401||/UNAUTHENTICATED|invalid authentication|invalid_token|Invalid Credentials/i.test(m))return 'expired';if(status===403||/PERMISSION_DENIED/.test(m))return 'forbidden';return ''}
+function authKind(status,m){m=String(m);if(/AUTH_DENIED/.test(m))return 'denied';if(status===401||/UNAUTHENTICATED|invalid authentication|invalid_token|Invalid Credentials/i.test(m))return 'expired';if(status===403||status===404||/PERMISSION_DENIED|NOT_FOUND/.test(m))return 'forbidden';return ''}
 function clearData(){D=null;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).innerHTML=''});$('desk').innerHTML='';$('stamp').textContent=''}
 function showLogin(msg){clearData();SUBMITTING=false;ACTIVE=null;['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).classList.add('hidden')});$('desk').classList.add('hidden');$('loading').classList.add('hidden');$('login').classList.remove('hidden');document.querySelector('nav').classList.add('hidden');$('logout').classList.add('hidden');$('pwMsg').textContent=msg?String(msg).replace(/^.*AUTH_DENIED: ?/,''):''}
 function initGis(){
@@ -165,7 +165,7 @@ function srv(fn, args, ok, fail, opts){
         var k=authKind(x.status,m);
         if(k==='expired'){saveTok(null);showLogin('로그인이 만료됐습니다. 다시 로그인해 주세요.');return}
         if(k==='denied'){saveTok(null);showLogin(m);return}
-        if(k==='forbidden'){saveTok(null);showLogin('권한이 없습니다: '+m+'\n(회사 계정이면 조직 정책이 외부 앱을 막았을 수 있습니다. 시트 공유 권한도 확인하세요.)');return}
+        if(k==='forbidden'){if(fail)fail({message:'권한이 없습니다: '+m+' (회사 계정이면 조직 정책이 외부 앱을 막았을 수 있습니다. 시트 공유 권한도 확인하세요.)'});return}   // 토큰은 유지: 403은 함수·권한 단위 거부일 수 있다
         if(fail)fail({message:'서버 오류: '+m});return}
       var res=j.response?j.response.result:undefined;
       if(res===undefined||res===null){if(fail)fail({message:'서버 응답이 비어 있습니다. 새로고침 후 다시 확인하세요.'});return}

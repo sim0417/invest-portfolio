@@ -96,7 +96,7 @@ table.t td.l{text-align:left}
 <header><h1>투자 포트폴리오 <small><span id="stamp"></span> <a href="#" id="logout" class="hidden" style="color:var(--sub)">로그아웃</a></small></h1></header>
 <main>
   <div id="loading">불러오는 중…</div>
-  <section id="login" class="hidden"><div class="card"><div class="lbl">본인 확인</div><button class="btn" id="gLogin">Google 계정으로 로그인</button><div class="note">허용된 계정(개인·회사)만 열립니다. 한 번 로그인하면 24시간 유지됩니다.</div><div id="pwMsg" class="msg bad"></div></div></section>
+  <section id="login" class="hidden"><div class="card"><div class="lbl">본인 확인</div><button class="btn" id="gLogin">Google 계정으로 로그인</button><div class="note">허용된 계정(개인·회사)만 열립니다. 한 번 로그인하면 7일 유지됩니다.</div><div id="pwMsg" class="msg bad"></div></div></section>
   <section id="tab-sum" class="hidden"></section>
   <section id="tab-hold" class="hidden"></section>
   <section id="tab-reb" class="hidden"></section>
@@ -122,9 +122,9 @@ var CFG = {
   scopes: 'https://www.googleapis.com/auth/script.scriptapp https://www.googleapis.com/auth/script.external_request https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/spreadsheets.currentonly'
 };
 var TOK = null, tokenClient = null, pendingAfterLogin = null, SESSION = 0;
-var UI_VERSION = 'v10.3';
-// 로그인 유지: 로그인하면 중계 서버(별도 Apps Script 「portfolio-auth」)가 갱신 토큰을 보관하고 24시간짜리 세션을 준다.
-// 액세스 토큰(1시간)이 모자라면 세션으로 중계 서버에서 조용히 새로 받는다 → 24시간 동안 다시 로그인하지 않는다.
+var UI_VERSION = 'v10.4';
+// 로그인 유지: 로그인하면 중계 서버(별도 Apps Script 「portfolio-auth」)가 갱신 토큰을 보관하고 7일짜리 세션을 준다.
+// 액세스 토큰(1시간)이 모자라면 세션으로 중계 서버에서 조용히 새로 받는다 → 7일 동안 다시 로그인하지 않는다.
 // 세션·토큰은 localStorage에 둔다(같은 origin JS가 읽을 수 있는 잔여 위험은 사용자 편의를 위해 수용). 로그아웃하면 Google 권한까지 철회한다.
 var SESS = null, REFRESHING = null;
 try { sessionStorage.removeItem('pfTok'); var t = JSON.parse(localStorage.getItem('pfTok') || 'null'); if (t && t.exp > Date.now() + 60000) TOK = t; } catch (e) {}
@@ -136,7 +136,7 @@ function broker(body){return fetch(CFG.broker,{method:'POST',headers:{'Content-T
 // 토큰 남은 시간이 need보다 짧으면 세션으로 새 토큰을 받아 온다(동시에 여러 호출이 와도 한 번만 요청)
 // 갱신은 시작 시점의 로그인 세대·세션에 묶는다: 그사이 로그아웃·계정 전환이 있었으면 결과를 버린다(토큰 저장·호출·화면 갱신 모두 안 함).
 function ensureToken(need,cont,lost,dropped){
-  if(!SESS||!(SESS.exp>Date.now())){saveSess(null);return lost()}   // 24시간 세션이 끝나면 남은 액세스 토큰이 있어도 다시 로그인
+  if(!SESS||!(SESS.exp>Date.now())){saveSess(null);return lost()}   // 세션이 끝나면 남은 액세스 토큰이 있어도 다시 로그인
   if(TOK&&TOK.exp>Date.now()+need)return cont();
   var gen=SESSION,sid=SESS.s,email=SESS.email;
   if(!REFRESHING||REFRESHING.sid!==sid){
@@ -144,7 +144,8 @@ function ensureToken(need,cont,lost,dropped){
     me.p=broker({op:'refresh',session:sid}).then(function(j){
       if(REFRESHING===me)REFRESHING=null;
       if(SESSION!==gen||!SESS||SESS.s!==sid)return 'stale';
-      if(!(SESS.exp>Date.now())){saveSess(null);return 'fail'}   // 갱신을 기다리는 사이 24시간 세션이 끝났다
+      if(!(SESS.exp>Date.now())){saveSess(null);return 'fail'}   // 갱신을 기다리는 사이 세션이 끝났다
+      if(j.session&&j.sessionExp>Date.now()&&j.email===email)saveSess({s:j.session,exp:j.sessionExp,email:email});   // 서버가 세션을 다시 발급(24시간→7일 전환)
       var te=tokExp(j.expires_in,SESS.exp);
       if(j.access_token&&j.email===email&&te){saveTok({access_token:j.access_token,exp:te});return 'ok'}
       if(j.error==='relogin')saveSess(null);
@@ -200,7 +201,7 @@ function srv(fn, args, ok, fail, opts){
   ensureToken(need,function(){if(SESSION!==g0){fin();return}call(fn,args,ok,fail,opts,fin,g0)},function(){
     fin();if(SESSION!==g0)return;
     if(TOK&&opts&&opts.onReauth){opts.onReauth(function(){srv(fn,args,ok,fail,opts)});return}
-    saveTok(null);showLogin(lastUser()?'로그인이 만료됐습니다(24시간). 다시 로그인해 주세요.':'');
+    saveTok(null);showLogin(lastUser()?'로그인이 만료됐습니다. 다시 로그인해 주세요.':'');
   },fin);
 }
 function call(fn,args,ok,fail,opts,fin,g0){
@@ -268,7 +269,7 @@ var DESK_MQ=window.matchMedia?window.matchMedia('(min-width:1100px)'):{matches:f
 function isDesk(){return DESK_MQ.matches}
 if(DESK_MQ.addEventListener)DESK_MQ.addEventListener('change',function(){if(D)render()});
 function render(){
-  $('stamp').textContent='조회 '+D.now+(D.user?' · '+D.user:'')+(SESS?' · 로그인 유지 ~'+new Date(SESS.exp).toTimeString().slice(0,5):'');
+  $('stamp').textContent='조회 '+D.now+(D.user?' · '+D.user:'')+(SESS?' · 로그인 유지 ~'+(function(d){return (d.getMonth()+1)+'/'+d.getDate()+' '+d.toTimeString().slice(0,5)})(new Date(SESS.exp)):'');
   try{if(D.user)localStorage.setItem('pfUser',D.user)}catch(e){}
   if(isDesk()){
     ['sum','hold','reb','perf','in'].forEach(function(k){$('tab-'+k).innerHTML='';$('tab-'+k).classList.add('hidden')});
